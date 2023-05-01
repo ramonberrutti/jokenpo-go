@@ -4,37 +4,40 @@ import "sync"
 
 type Room struct {
 	// Lock to prevent concurrent access to the room.
-	sync.Mutex
+	sync.RWMutex
 
 	// Id of the room.
-	Id string
+	id string
 
 	// Name of the room.
-	Name string
+	name string
 
 	// Player 1 of the room.
-	Player1 string
+	player1 string
 
 	// Player 2 of the room.
-	Player2 string
+	player2 string
 
 	// Player 1 join code.
-	Player1JoinCode string
+	player1JoinCode string
 
 	// Player 2 join code.
-	Player2JoinCode string
+	player2JoinCode string
 
 	// State of the room.
-	State RoomState
+	state RoomState
 
 	// Rounds to play in the room.
-	Rounds int
+	rounds int
 
 	// Current round of the room.
-	CurrentRound int
+	currentRound int
 
 	// Current round of the room.
-	Results []RoundResult
+	results []RoundResult
+
+	subscriptions  map[int]func(e *Event)
+	subscriptionId int
 }
 
 type RoomState int
@@ -66,6 +69,10 @@ const (
 	Scissors
 )
 
+func (m Move) String() string {
+	return [...]string{"NoMove", "Rock", "Paper", "Scissors"}[m]
+}
+
 type RoundResult struct {
 	// Player 1 move.
 	Player1Move Move
@@ -76,61 +83,61 @@ type RoundResult struct {
 
 func NewRoom(id string, name string, player1 string, player2 string, rounds int) *Room {
 	return &Room{
-		Id:      id,
-		Name:    name,
-		Player1: player1,
-		Player2: player2,
-		Rounds:  rounds,
-		State:   WaitingForPlayers,
-		Results: make([]RoundResult, rounds),
+		id:      id,
+		name:    name,
+		player1: player1,
+		player2: player2,
+		rounds:  rounds,
+		state:   WaitingForPlayers,
+		results: make([]RoundResult, rounds),
 	}
 }
 
 func (r *Room) Start() {
 	r.Lock()
 	defer r.Unlock()
-	if r.State != WaitingForPlayers {
+	if r.state != WaitingForPlayers {
 		return
 	}
 
-	r.State = Running
+	r.state = Running
 }
 
 func (r *Room) AddPlayer1Move(move Move) {
 	r.Lock()
 	defer r.Unlock()
-	if r.State != Running {
+	if r.state != Running {
 		return
 	}
 
 	// Prevent player 1 from changing the move.
-	if r.Results[r.CurrentRound].Player1Move != NoMove {
+	if r.results[r.currentRound].Player1Move != NoMove {
 		return
 	}
 
-	r.Results[r.CurrentRound].Player1Move = move
+	r.results[r.currentRound].Player1Move = move
 	r.processRound()
 }
 
 func (r *Room) AddPlayer2Move(move Move) {
 	r.Lock()
 	defer r.Unlock()
-	if r.State != Running {
+	if r.state != Running {
 		return
 	}
 
 	// Prevent player 2 from changing the move.
-	if r.Results[r.CurrentRound].Player2Move != NoMove {
+	if r.results[r.currentRound].Player2Move != NoMove {
 		return
 	}
 
-	r.Results[r.CurrentRound].Player2Move = move
+	r.results[r.currentRound].Player2Move = move
 	r.processRound()
 }
 
 func (r *Room) processRound() {
-	player1Move := r.Results[r.CurrentRound].Player1Move
-	player2Move := r.Results[r.CurrentRound].Player2Move
+	player1Move := r.results[r.currentRound].Player1Move
+	player2Move := r.results[r.currentRound].Player2Move
 
 	// If any of the players didn't make a move.
 	if player1Move == NoMove || player2Move == NoMove {
@@ -139,32 +146,33 @@ func (r *Room) processRound() {
 
 	// If both players made the same move.
 	if player1Move == player2Move {
-		r.Results[r.CurrentRound].Player1Move = NoMove
-		r.Results[r.CurrentRound].Player2Move = NoMove
+		r.results[r.currentRound].Player1Move = NoMove
+		r.results[r.currentRound].Player2Move = NoMove
 		return
 	}
 
-	r.Results[r.CurrentRound] = RoundResult{
+	r.results[r.currentRound] = RoundResult{
 		Player1Move: player1Move,
 		Player2Move: player2Move,
 	}
 
 	// TODO: Add logic to determine the winner if win more than the half of the rounds.
 
-	r.CurrentRound++
-	if r.CurrentRound == r.Rounds {
+	r.currentRound++
+	if r.currentRound == r.rounds {
 		// TODO: Add overtime logic.
-		r.State = Finished
+		r.state = Finished
 	}
 }
 
+// GetResults return the ongoing results of the room.
 func (r *Room) GetResults() (int, int) {
 	r.Lock()
 	defer r.Unlock()
 
 	player1Wins := 0
 	player2Wins := 0
-	for _, result := range r.Results {
+	for _, result := range r.results {
 		switch {
 		case result.Player1Move == NoMove || result.Player2Move == NoMove:
 			continue
@@ -184,8 +192,92 @@ func (r *Room) GetResults() (int, int) {
 	return player1Wins, player2Wins
 }
 
+func (r *Room) GetId() string {
+	r.RLock()
+	defer r.RUnlock()
+	return r.id
+}
+
+func (r *Room) GetName() string {
+	r.RLock()
+	defer r.RUnlock()
+	return r.name
+}
+
 func (r *Room) GetState() RoomState {
+	r.RLock()
+	defer r.RUnlock()
+	return r.state
+}
+
+func (r *Room) GetPlayer1() string {
+	r.RLock()
+	defer r.RUnlock()
+	return r.player1
+}
+
+func (r *Room) GetPlayer2() string {
+	r.RLock()
+	defer r.RUnlock()
+	return r.player2
+}
+
+func (r *Room) GetPlayer1JoinCode() string {
+	r.RLock()
+	defer r.RUnlock()
+	return r.player1JoinCode
+}
+
+func (r *Room) GetPlayer2JoinCode() string {
+	r.RLock()
+	defer r.RUnlock()
+	return r.player2JoinCode
+}
+
+func (r *Room) GetRounds() int {
+	r.RLock()
+	defer r.RUnlock()
+	return r.rounds
+}
+
+func (r *Room) GetCurrentRound() int {
+	r.RLock()
+	defer r.RUnlock()
+	return r.currentRound
+}
+
+func (r *Room) GetResultsForRound(round int) (Move, Move) {
+	r.RLock()
+	defer r.RUnlock()
+
+	if round < 0 || round >= r.rounds {
+		return NoMove, NoMove
+	}
+
+	return r.results[round].Player1Move, r.results[round].Player2Move
+}
+
+type Event struct {
+	State        RoomState
+	CurrentRound int
+	Player1Move  Move
+	Player2Move  Move
+	Player1Wins  int
+	Player2Wins  int
+}
+
+func (r *Room) Subscribe(cb func(*Event)) func() {
 	r.Lock()
 	defer r.Unlock()
-	return r.State
+	r.subscriptionId++
+	nextId := r.subscriptionId
+
+	r.subscriptions[nextId] = cb
+
+	return func() {
+		r.Lock()
+		defer r.Unlock()
+
+		delete(r.subscriptions, nextId)
+	}
 }
